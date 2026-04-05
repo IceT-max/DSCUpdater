@@ -1,0 +1,23 @@
+[ClassVersion("1.0.0"), FriendlyName("cSoftwareInstall")]
+class cSoftwareInstall : OMI_BaseResource
+{
+    [Key, Description("Nome del software come appare in Installazione applicazioni")]
+        String Name;
+
+    [Required, Description("Versione target desiderata, es. 3.2.1.0")]
+        String TargetVersion;
+
+    [Required, Description("Percorso UNC oppure URL http/https dell installer")]
+        String InstallerPath;
+
+    [Write, Description("Tipo installer: MSI o EXE"),
+        ValueMap{"MSI","EXE"}, Values{"MSI","EXE"}]
+        String InstallerType;
+
+    [Write, Description("Argomenti silenziosi. Default: /qn /norestart per MSI, /S per EXE")]
+        String SilentArgs;
+
+    [Write, Description("Present = installato/aggiornato, Absent = rimosso"),
+        ValueMap{"Present","Absent"}, Values{"Present","Absent"}]
+        String Ensure;
+};

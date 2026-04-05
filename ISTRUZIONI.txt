@@ -1,0 +1,283 @@
+DSC Software Management - Guida Operativa Completa
+PowerShell 5.1 | Pull Server Architecture
+===========================================================================
+
+
+===========================================================================
+PREREQUISITI
+===========================================================================
+
+Pull Server (Windows Server):
+  - Windows Server 2016, 2019 o 2022
+  - Ruolo IIS disponibile (lo installa lo script)
+  - Connessione Internet per scaricare il modulo xPSDesiredStateConfiguration
+  - PowerShell 5.1
+  - Esecuzione script come Amministratore
+
+PC Client (nodi):
+  - Windows 10 o Windows 11
+  - PowerShell 5.1
+  - WinRM abilitato (per gestione remota da macchina admin)
+  - Raggiungibilita' del Pull Server sulla porta TCP 8080
+
+Macchina Admin (la tua):
+  - PowerShell 5.1
+  - Accesso amministrativo al Pull Server (SMB porta 445 o WinRM porta 5985)
+  - Accesso WinRM ai client (porta 5985) per i comandi di diagnostica
+
+File server (consigliato):
+  - Share di rete accessibile da tutti i client (es. \\FILESERVER\DSC-Installers)
+  - Contiene i file MSI/EXE degli installer
+  - Permessi di lettura per i computer del dominio
+
+
+===========================================================================
+FASE 1 - PREPARAZIONE CARTELLA PROGETTO (macchina admin)
+===========================================================================
+
+1. Copia la cartella DSC-SoftwareManagement in un percorso a scelta,
+   ad esempio: C:\DSC\DSC-SoftwareManagement
+
+   La struttura deve essere:
+   C:\DSC\DSC-SoftwareManagement\
+     cSoftwareManagement\          (non toccare)
+     SoftwareList.psd1
+     SoftwareConfig.ps1
+     Setup-PullServer.ps1
+     Setup-NodeLCM.ps1
+     Deploy-Config.ps1
+     README.txt
+
+2. Copia i file installer MSI/EXE dei tuoi programmi sulla share di rete:
+   \\FILESERVER\DSC-Installers\
+
+   Esempio:
+   \\FILESERVER\DSC-Installers\7z2408-x64.msi
+   \\FILESERVER\DSC-Installers\npp.8.6.9.Installer.x64.exe
+
+
+===========================================================================
+FASE 2 - CONFIGURAZIONE LISTA SOFTWARE (macchina admin)
+===========================================================================
+
+1. Apri SoftwareList.psd1 con un editor di testo (Notepad, VS Code, ecc.)
+
+2. Per ogni software che vuoi gestire, aggiungi un blocco @{ ... }
+   seguendo questo schema:
+
+   @{
+       Name          = 'Nome Programma'
+       TargetVersion = '1.2.3.0'
+       InstallerPath = '\\FILESERVER\DSC-Installers\programma.msi'
+       InstallerType = 'MSI'
+       SilentArgs    = '/qn /norestart'
+       Ensure        = 'Present'
+   },
+
+   NOTA su Name: deve corrispondere al nome che appare in
+   "Impostazioni > App" o "Installazione applicazioni".
+   Per trovarlo su un PC dove il software e' gia' installato:
+
+   Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* |
+       Select-Object DisplayName, DisplayVersion | Sort-Object DisplayName
+
+   Il nome non deve essere esatto: '7-Zip' trova anche '7-Zip 24.08 (x64)'.
+
+   NOTA su TargetVersion: usa il formato a 4 cifre quando possibile
+   (es. 24.8.0.0 anziche' 24.8). Per trovare la versione di un installer
+   MSI senza installarlo:
+   (Get-Item '\\SERVER\Share\app.msi').VersionInfo.ProductVersion
+
+   NOTA su InstallerType:
+   MSI -> usa msiexec.exe, SilentArgs default: /qn /norestart
+   EXE -> avvia direttamente, SilentArgs default: /S
+
+3. Salva il file.
+
+
+===========================================================================
+FASE 3 - CONFIGURAZIONE NODI (macchina admin)
+===========================================================================
+
+1. Apri SoftwareConfig.ps1
+
+2. Modifica l'array $Nodes con i nomi FQDN o NetBIOS dei tuoi PC:
+
+   $Nodes = @(
+       'PC-MARIO.azienda.locale',
+       'PC-LUIGI.azienda.locale',
+       'PC-UFFICIO3.azienda.locale'
+   )
+
+3. Salva il file.
+
+
+===========================================================================
+FASE 4 - SETUP PULL SERVER (sul Pull Server, una sola volta)
+===========================================================================
+
+1. Copia la cartella DSC-SoftwareManagement anche sul Pull Server,
+   ad esempio in C:\DSC\DSC-SoftwareManagement
+
+2. Apri PowerShell come Amministratore sul Pull Server
+
+3. Esegui:
+   cd C:\DSC\DSC-SoftwareManagement
+   .\Setup-PullServer.ps1
+
+   Lo script eseguira' automaticamente:
+   - Installazione feature IIS e DSC-Service
+   - Download e installazione modulo xPSDesiredStateConfiguration
+   - Creazione cartelle di servizio
+   - Generazione Registration Key univoca
+   - Configurazione endpoint HTTP DSC
+   - Apertura porta 8080 nel firewall Windows (profilo Domain)
+
+4. Al termine lo script stampa a schermo:
+
+   === Pull Server configurato ===
+   URL endpoint    : http://NOMESERVER:8080/PSDSCPullServer
+   Registration Key: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+   COPIA E SALVA ENTRAMBI I VALORI. Ti serviranno nel passo successivo.
+
+   La Registration Key e' salvata anche nel file:
+   C:\Program Files\WindowsPowerShell\DscService\RegistrationKeys.txt
+
+
+===========================================================================
+FASE 5 - PRIMO DEPLOY (macchina admin)
+===========================================================================
+
+1. Assicurati che la cartella cSoftwareManagement sia accessibile
+   dalla macchina admin (deve trovarsi nella stessa cartella degli altri script)
+
+2. Apri PowerShell come Amministratore sulla macchina admin
+
+3. Esegui:
+   cd C:\DSC\DSC-SoftwareManagement
+   .\Deploy-Config.ps1
+
+   Lo script eseguira' automaticamente:
+   - Copia del modulo cSoftwareManagement nel PSModulePath locale
+   - Compilazione di SoftwareConfig.ps1 -> genera un .mof per ogni nodo
+   - Calcolo checksum SHA256 per ogni MOF
+   - Copia MOF e checksum nella cartella Configuration del Pull Server
+   - Archiviazione ZIP del modulo cSoftwareManagement nella cartella
+     Modules del Pull Server (per distribuzione automatica ai nodi)
+
+   NOTA: Deploy-Config.ps1 si aspetta di girare sulla stessa macchina
+   del Pull Server, oppure che le cartelle del Pull Server siano
+   raggiungibili via UNC. Se la macchina admin e' diversa dal Pull Server,
+   modifica le variabili $PullConfigPath e $PullModulePath in cima al file
+   con i percorsi UNC corretti:
+
+   $PullConfigPath = '\\PULLSERVER\C$\Program Files\WindowsPowerShell\DscService\Configuration'
+   $PullModulePath = '\\PULLSERVER\C$\Program Files\WindowsPowerShell\DscService\Modules'
+
+
+===========================================================================
+FASE 6 - CONFIGURAZIONE LCM SUI CLIENT (su ogni PC client)
+===========================================================================
+
+1. Apri Setup-NodeLCM.ps1 e modifica le due righe:
+
+   $PullServerUrl   = 'http://NOMESERVER:8080/PSDSCPullServer'
+   $RegistrationKey = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+
+   Usa esattamente l'URL e la Registration Key copiati nella Fase 4.
+
+2. Salva il file.
+
+3. Esegui lo script su ogni client. Hai tre modi:
+
+   A) Direttamente sul PC client (copia lo script e apri PowerShell admin):
+      .\Setup-NodeLCM.ps1
+
+   B) Da remoto dalla macchina admin (per un singolo PC):
+      Invoke-Command -ComputerName PC-MARIO `
+          -FilePath C:\DSC\DSC-SoftwareManagement\Setup-NodeLCM.ps1
+
+   C) Da remoto su tutti i PC in una volta:
+      $tutti = @('PC-MARIO','PC-LUIGI','PC-UFFICIO3')
+      Invoke-Command -ComputerName $tutti `
+          -FilePath C:\DSC\DSC-SoftwareManagement\Setup-NodeLCM.ps1
+
+4. Al termine ogni PC e' configurato per contattare il Pull Server
+   ogni 30 minuti. Al primo ciclo scarica e applica la configurazione,
+   installando tutti i software mancanti o da aggiornare.
+
+
+===========================================================================
+VERIFICA CHE TUTTO FUNZIONI
+===========================================================================
+
+Forza un controllo immediato su un PC (senza aspettare 30 minuti):
+  Invoke-Command -ComputerName PC-MARIO -ScriptBlock {
+      Update-DscConfiguration -Wait -Verbose
+  }
+
+Controlla lo stato di conformita':
+  Get-DscConfigurationStatus -CimSession PC-MARIO
+
+  L'output mostra:
+  Status  : Success   -> tutto conforme, nessuna azione eseguita
+  Status  : Success   -> configurazione applicata con successo
+  Status  : Failure   -> qualcosa e' andato storto (vedi i dettagli)
+
+Controlla cosa e' installato su un nodo:
+  Invoke-Command -ComputerName PC-MARIO -ScriptBlock {
+      Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* |
+      Select-Object DisplayName, DisplayVersion | Sort-Object DisplayName
+  }
+
+Controlla lo stato del LCM su un nodo:
+  Get-DscLocalConfigurationManager -CimSession PC-MARIO
+
+
+===========================================================================
+USO QUOTIDIANO - AGGIUNGERE O MODIFICARE SOFTWARE
+===========================================================================
+
+Quando vuoi aggiungere un nuovo software o aggiornare la versione target:
+
+1. Copia il nuovo installer su \\FILESERVER\DSC-Installers\
+
+2. Apri SoftwareList.psd1 e aggiungi o modifica il blocco corrispondente
+
+3. Esegui dalla macchina admin:
+   .\Deploy-Config.ps1
+
+4. I PC si aggiornano automaticamente entro 30 minuti.
+   Per forzare subito uno o piu' PC:
+   Invoke-Command -ComputerName PC-MARIO -ScriptBlock {
+       Update-DscConfiguration -Wait
+   }
+
+NON e' necessario rieseguire Setup-PullServer.ps1 o Setup-NodeLCM.ps1.
+Quelli si eseguono una sola volta.
+
+
+===========================================================================
+RIEPILOGO PORTE FIREWALL DA APRIRE
+===========================================================================
+
+  Da             A              Porta   Protocollo   Motivo
+  -------------- -------------- ------- ------------ ----------------------
+  PC Client      Pull Server    8080    TCP          LCM -> Pull Server
+  Macchina Admin Pull Server    445     TCP          Copia MOF via SMB
+  Macchina Admin Pull Server    5985    TCP          WinRM (alternativa SMB)
+  Macchina Admin PC Client      5985    TCP          Diagnostica remota
+  PC Client      File Server    445     TCP          Download installer UNC
+
+
+===========================================================================
+RIEPILOGO SCRIPT E QUANDO ESEGUIRLI
+===========================================================================
+
+  Script                Dove            Quando
+  -------------------- --------------- ---------------------------------
+  Setup-PullServer.ps1  Pull Server     Una sola volta (setup iniziale)
+  Setup-NodeLCM.ps1     Ogni PC client  Una sola volta per PC
+  Deploy-Config.ps1     Macchina admin  Ogni volta che cambi SoftwareList
+  SoftwareConfig.ps1    (automatico)    Chiamato da Deploy-Config.ps1
